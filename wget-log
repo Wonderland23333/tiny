@@ -1,0 +1,11 @@
+--2023-02-13 14:30:34--  http://localhost:8888/cgi-bin/adder?1500
+Resolving localhost (localhost)... 127.0.0.1
+Connecting to localhost (localhost)|127.0.0.1|:8888... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: unspecified
+Saving to: ‘adder?1500’
+
+adder?1500               [<=>                 ]       0  --.-KB/s               adder?1500               [ <=>                ]       0  --.-KB/s    in 0s      
+
+2023-02-13 14:30:34 (0.00 B/s) - ‘adder?1500’ saved [0]
+
