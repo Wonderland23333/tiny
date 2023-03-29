@@ -17,53 +17,25 @@ void get_filetype(const char *filename, char *filetype);
 void serve_dynamic(int fd, const char *filename, const char *cgiargs);
 void clienterror(int fd, const char *cause, const char *errnum,
                  const char *shortmsg, const char *longmsg);
-struct thread_arg {
-    int argc;
-    char **argv;
-};
 
 pthread_mutex_t mutex;
 
-void* handle_client(void* arg){
-    struct thread_arg *t_arg = (struct thread_arg *)arg;
-    int argc = t_arg->argc;
-    char **argv = t_arg->argv;
-    pthread_mutex_lock(&mutex);
+void *handle_client(void *arg)
+{
+    int connfd = *(int *)arg;
+    pthread_detach(pthread_self());
+    doit(connfd);
+    return NULL;
 
-    // 在这里处理客户端请求和事务
-    // ...
-    int listenfd, connfd;
-    char hostname[MAXLINE], port[MAXLINE];
-    socklen_t clientlen;
-    struct sockaddr_storage clientaddr;
-    
-    
-    /* Check command line args */
-    if (argc != 2)
-    {
-        fprintf(stderr, "usage: %s <port>\n", argv[0]);
-        exit(1);
-    }
-
-    listenfd = Open_listenfd(argv[1]);
-        clientlen = sizeof(clientaddr);
-        connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen); // line:netp:tiny:accept
-        Getnameinfo((SA *)&clientaddr, clientlen, hostname, MAXLINE,
-                    port, MAXLINE, 0);
-        printf("Accepted connection from (%s, %s)\n", hostname, port);
-        doit(connfd);  // line:netp:tiny:doit
-        Close(connfd); // line:netp:tiny:close
-
-
-    pthread_mutex_unlock(&mutex);
-    pthread_exit(NULL);
 }
 
 int main(int argc, char **argv)
 {
+    int listenfd, connfd;
+    socklen_t clientlen;
+    struct sockaddr_storage clientaddr;
     pthread_t tid;
-    struct thread_arg t_arg;
-
+    
     int ret = pthread_mutex_init(&mutex, NULL);
     if (ret != 0) {
         printf("pthread_mutex_init failed\n");
@@ -71,34 +43,70 @@ int main(int argc, char **argv)
     }
 
     printf("pthread_mutex_init success\n");
-    t_arg.argc = argc;
-    t_arg.argv = argv;
-pthread_create(&tid, NULL, handle_client, (void *)&t_arg);
-    int listenfd, connfd;
-    char hostname[MAXLINE], port[MAXLINE];
-    socklen_t clientlen;
-    struct sockaddr_storage clientaddr;
-    /* Check command line args */
+
+    fd_set read_set, ready_set;
+    FD_ZERO(&read_set);
+    FD_SET(STDIN_FILENO, &read_set);//添加标准输入0描述符
+
     if (argc != 2)
     {
         fprintf(stderr, "usage: %s <port>\n", argv[0]);
         exit(1);
     }
-
     listenfd = Open_listenfd(argv[1]);
+    FD_SET(listenfd, &read_set);
+    int maxfd = listenfd;
+
     while (1)
     {
-        clientlen = sizeof(clientaddr);
-        connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen); // line:netp:tiny:accept
-        Getnameinfo((SA *)&clientaddr, clientlen, hostname, MAXLINE,
-                    port, MAXLINE, 0);
-        printf("This is main\nAccepted connection from (%s, %s)\n", hostname, port);
-        
-        doit(connfd);  // line:netp:tiny:doit
-        Close(connfd); // line:netp:tiny:close
+        ready_set = read_set;
+        Select(maxfd + 1, &ready_set, NULL, NULL, NULL);
+
+        if (FD_ISSET(STDIN_FILENO, &ready_set))
+        {
+            // 如果按下ctrlC，终止服务器
+            printf("Terminating server.\n");
+            exit(0);
+        }
+
+        if (FD_ISSET(listenfd, &ready_set))
+        {
+            clientlen = sizeof(clientaddr);
+            connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);
+            if (connfd < 0) {
+            printf("Invalid file descriptor\n");
+            return 0;
+            }
+            printf("Accepted connection from client.\n");
+
+            // 启动线程处理客户端连接
+            Pthread_create(&tid, NULL, handle_client, &connfd);
+
+            // 添加新的connfd到read_set中
+            FD_SET(connfd, &read_set);
+            if (connfd > maxfd)
+                maxfd = connfd;
+        }
+        else
+        {
+            // 处理已连接的客户端请求
+            int i;
+            for (i = listenfd + 1; i <= maxfd; i++)
+            {
+                if (FD_ISSET(i, &ready_set))
+                {
+                    connfd = i;
+                    if (connfd < 0) {
+            printf("Invalid file descriptor\n");
+            return 0;
+            }
+                    doit(connfd);
+                    FD_CLR(connfd, &read_set);
+                }
+            }
+        }
     }
-    pthread_mutex_destroy(&mutex);
-    pthread_join(tid, NULL);
+    return 0;
 }
 /* $end tinymain */
 
@@ -118,12 +126,10 @@ void doit(int fd)
     /* Read request line and headers */
     Rio_readinitb(&rio, fd);
     if (!Rio_readlineb(&rio, buf, MAXLINE)) // line:netp:doit:readrequest
-        {   perror("Rio_readlineb error");
-            return;
-        }
+        return;
     printf("%s", buf);
     sscanf(buf, "%s %s %s", method, uri, version); // line:netp:doit:parserequest
-    if (strcasecmp(method, "GET"))
+    if (strcasecmp(method, "GET") && strcasecmp(method,"POST"))
     { // line:netp:doit:beginrequesterr
         clienterror(fd, method, "501", "Not Implemented",
                     "Tiny does not implement this method");
@@ -158,7 +164,9 @@ void doit(int fd)
                         "Tiny couldn't run the CGI program");
             return;
         }
-        serve_dynamic(fd, filename, cgiargs); // line:netp:doit:servedynamic
+        char s[MAXBUF];
+        sprintf(s,"%s",rio.rio_bufptr);
+        serve_dynamic(fd, filename, s); // line:netp:doit:servedynamic
     }
 }
 /* $end doit */
